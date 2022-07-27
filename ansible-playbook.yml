@@ -1,0 +1,93 @@
+---
+- name: Playbook
+  hosts: all
+  become: true
+  tasks:
+    - name: "APT - Update"
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: "APT - dependencies"
+      ansible.builtin.apt:
+        name:
+          - make
+          - jq
+          - python3
+          - python3-pip
+
+    # `snap info microk8s`
+    - name: "Snaps - k8 install"
+      community.general.snap:
+        name: microk8s
+        channel: 1.24/stable
+        classic: true
+
+    - name: "Pip - Install"
+      ansible.builtin.pip:
+        name:
+          - yq~=2.12.2
+
+    - name: "User group - sudo_no_password"
+      ansible.builtin.group:
+        name: sudo_no_password
+        state: present
+
+    - name: "User - Creation"
+      ansible.builtin.user:
+        name: "{{ lookup('env','USER') }}"
+        shell: /bin/bash
+        groups: "admin,sudo,sudo_no_password,microk8s"
+
+    - name: "User - Creation - .ssh directory"
+      ansible.builtin.file:
+        path: "/home/{{ lookup('env','USER') }}/.ssh"
+        state: directory
+        mode: '0700'
+        owner: "{{ lookup('env','USER') }}"
+        group: "{{ lookup('env','USER') }}"
+
+    - name: "User - Authorized keys - id_ed25519.pub add (if exists)"
+      ansible.builtin.authorized_key:
+        user: "{{ lookup('env','USER') }}"
+        key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_ed25519.pub', errors='ignore') }}"
+
+    - name: "Sudoers - sudo_no_password"
+      copy:
+        content: '%sudo_no_password ALL=(ALL:ALL) NOPASSWD:ALL'
+        dest: /etc/sudoers.d/sudo_no_password
+        mode: 0440
+
+    - name: "Microk8s - status (installed modules)"
+      ansible.builtin.command:
+        cmd: "microk8s status --yaml --wait-ready"
+      check_mode: false
+      changed_when: false
+      register: microk8s_status
+
+    - name: "Microk8s - status (debug)"
+      ansible.builtin.debug:
+        var: microk8s_status.stdout
+
+    - name: "Microk8s - enable dns module"
+      ansible.builtin.command:
+        cmd: "microk8s enable dns"
+      when: >
+        microk8s_status.stdout.find('core/dns: enabled') == -1
+
+    - name: "Microk8s - enable dashboard module"
+      ansible.builtin.command:
+        cmd: "microk8s enable dashboard"
+      when: >
+       microk8s_status.stdout.find('core/dashboard: enabled') == -1
+
+    - name: "Microk8s - enable storage module"
+      ansible.builtin.command:
+        cmd: "microk8s enable storage"
+      when: >
+       microk8s_status.stdout.find('core/storage: enabled') == -1
+
+    - name: "Microk8s - enable ingress module"
+      ansible.builtin.command:
+        cmd: "microk8s enable ingress"
+      when: >
+        microk8s_status.stdout.find('core/ingress: enabled') == -1
